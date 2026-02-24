@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HABESHA BROTHERS</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: #1a0a00;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+    image-rendering: pixelated;
+  }
+
+  #hud {
+    width: 900px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 20px;
+    background: #000;
+    border-bottom: 4px solid #4d9900;
+  }
+
+  .hud-item {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #ffffff;
+    letter-spacing: 1px;
+  }
+  .hud-item span { color: #ffd700; }
+
+  #gameCanvas {
+    display: block;
+    image-rendering: pixelated;
+    border: 4px solid #4d9900;
+    box-shadow: 0 0 0 4px #0000cc, 0 0 0 8px #cc0000;
+  }
+
+  #overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+    z-index: 10;
+    background: rgba(0,0,20,0.88);
+    padding: 30px 40px;
+    border: 4px solid #ffd700;
+    box-shadow: 0 0 0 4px #000, 0 0 0 8px #ffd700;
+  }
+
+  #overlay h1 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 28px;
+    color: #ffd700;
+    text-shadow: 3px 3px 0 #cc0000, 6px 6px 0 #000;
+    letter-spacing: 2px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+
+  #overlay .sub {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    color: #4dcc00;
+    letter-spacing: 1px;
+    margin-bottom: 20px;
+    animation: blink 1s step-end infinite;
+  }
+
+  #overlay .hint {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 7px;
+    color: #aaaaaa;
+    letter-spacing: 1px;
+    line-height: 2.4;
+  }
+
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  #wrapper { position: relative; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="hud-item">SCORE<br><span id="scoreEl">000000</span></div>
+  <div class="hud-item" style="color:#ffd700;font-size:8px;">HABESHA<br>BROTHERS</div>
+  <div class="hud-item">LIVES<br><span id="livesEl">x 3</span></div>
+  <div class="hud-item">COINS<br><span id="coinsEl">x 00</span></div>
+  <div class="hud-item">WORLD<br><span>1 - 1</span></div>
+</div>
+
+<div id="wrapper">
+  <canvas id="gameCanvas" width="900" height="500"></canvas>
+  <div id="overlay">
+    <h1>HABESHA<br>BROTHERS</h1>
+    <div class="sub">&gt; PRESS SPACE TO START &lt;</div>
+    <div class="hint">
+      ARROW KEYS / WASD — MOVE<br>
+      SPACE / UP — JUMP<br>
+      STOMP ENEMIES · GRAB COINS<br>
+      REACH THE FLAG POLE!
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const scoreEl = document.getElementById('scoreEl');
+const livesEl = document.getElementById('livesEl');
+const coinsEl = document.getElementById('coinsEl');
+
+const W = 900, H = 500;
+let gameState = 'title';
+let score = 0, lives = 3, coins = 0;
+let keys = {};
+let particles = [];
+let frame = 0;
+
+// ── ERITREAN FLAG COLORS ───────────────────
+// Flag: green (top), blue (bottom), red triangle on left, gold wreath
+const ERI = {
+  green:  '#4d9900',
+  greenLt:'#66cc00',
+  blue:   '#0000cc',
+  blueLt: '#3333ff',
+  red:    '#cc0000',
+  redLt:  '#ff3333',
+  gold:   '#ffd700',
+  goldDk: '#cc9900',
+  sky:    '#5ba8ff',
+  skyLt:  '#87ceeb',
+};
+
+// ── PIXEL GRID HELPER ──────────────────────
+function px(x,y,w,h,col) {
+  ctx.fillStyle=col;
+  ctx.fillRect(x,y,w,h);
+}
+
+// ── LEVEL DATA ─────────────────────────────
+const GROUND_Y = 448;
+const TILE = 32;
+
+const LEVEL = {
+  platforms: [
+    // Ground
+    {x:0,    y:GROUND_Y, w:280,  h:52, type:'ground'},
+    {x:340,  y:GROUND_Y, w:200,  h:52, type:'ground'},
+    {x:590,  y:GROUND_Y, w:310,  h:52, type:'ground'},
+    // Floating brick/question blocks (y positions)
+    {x:128,  y:320, w:32,  h:32, type:'brick'},
+    {x:160,  y:320, w:32,  h:32, type:'question', hasCoin:true},
+    {x:192,  y:320, w:32,  h:32, type:'brick'},
+    {x:256,  y:320, w:32,  h:32, type:'question', hasCoin:true},
+    {x:384,  y:288, w:32,  h:32, type:'question', hasCoin:true},
+    {x:416,  y:288, w:32,  h:32, type:'brick'},
+    {x:448,  y:288, w:32,  h:32, type:'question', hasCoin:true},
+    {x:480,  y:288, w:32,  h:32, type:'brick'},
+    {x:384,  y:224, w:32,  h:32, type:'brick'},
+    {x:416,  y:224, w:32,  h:32, type:'brick'},
+    {x:448,  y:224, w:32,  h:32, type:'brick'},
+    {x:608,  y:320, w:32,  h:32, type:'question', hasCoin:true},
+    {x:672,  y:320, w:32,  h:32, type:'brick'},
+    {x:704,  y:320, w:32,  h:32, type:'question', hasCoin:true},
+    {x:736,  y:288, w:32,  h:32, type:'brick'},
+    {x:768,  y:288, w:32,  h:32, type:'brick'},
+    {x:736,  y:224, w:96,  h:32, type:'brick'},
+    // Stairs to flag
+    {x:820,  y:GROUND_Y-32,  w:32, h:32,  type:'stair'},
+    {x:820,  y:GROUND_Y-64,  w:32, h:32,  type:'stair'},
+    {x:820,  y:GROUND_Y-96,  w:32, h:32,  type:'stair'},
+    {x:852,  y:GROUND_Y-32,  w:32, h:32+52, type:'stair'},
+    {x:852,  y:GROUND_Y-64,  w:32, h:32,  type:'stair'},
+    {x:852,  y:GROUND_Y-96,  w:32, h:32,  type:'stair'},
+    {x:852,  y:GROUND_Y-128, w:32, h:32,  type:'stair'},
+  ],
+  coins: [
+    {x:148,y:296},{x:180,y:296},{x:270,y:296},
+    {x:400,y:264},{x:432,y:264},{x:464,y:264},
+    {x:400,y:200},{x:432,y:200},{x:464,y:200},
+    {x:620,y:296},{x:688,y:296},{x:720,y:296},
+    {x:748,y:264},{x:780,y:264},
+    {x:748,y:200},{x:780,y:200},{x:812,y:200},
+  ],
+  enemies: [
+    {x:200, y:GROUND_Y-24, dir:1, speed:1.0, type:'goomba', platX:0,   platW:280},
+    {x:400, y:GROUND_Y-24, dir:-1,speed:1.1, type:'goomba', platX:340, platW:200},
+    {x:650, y:GROUND_Y-24, dir:1, speed:1.2, type:'goomba', platX:590, platW:310},
+    {x:700, y:GROUND_Y-24, dir:-1,speed:0.9, type:'koopa',  platX:590, platW:310},
+    {x:420, y:265,         dir:1, speed:1.0, type:'goomba', platX:384, platW:128},
+    {x:750, y:205,         dir:-1,speed:1.1, type:'goomba', platX:736, platW:96},
+  ],
+  flagPole: {x:868, y:GROUND_Y-220, h:220},
+  pipes: [
+    {x:300, y:GROUND_Y-64, w:64, h:64},
+    {x:560, y:GROUND_Y-80, w:64, h:80},
+  ],
+  goal: {x:852, y:GROUND_Y-220, w:48, h:220},
+  playerStart: {x:40, y:GROUND_Y-32},
+};
+
+let player, enemies, coinItems, questionStates, flagAnimY;
+let flagReached = false;
+
+function initLevel() {
+  const s = LEVEL.playerStart;
+  player = {
+    x:s.x, y:s.y, w:24, h:32,
+    vx:0, vy:0, onGround:false,
+    facing:1, animFrame:0, animTimer:0,
+    invincible:0, big:false,
+  };
+  enemies = LEVEL.enemies.map(e=>({
+    ...e, w:e.type==='koopa'?24:28, h:e.type==='koopa'?32:26,
+    vy:0, onGround:false, dead:false, deadTimer:0,
+    shellMode:false, shellVx:0,
+  }));
+  coinItems = LEVEL.coins.map(c=>({...c,w:16,h:16,collected:false,animY:0}));
+  questionStates = {};
+  LEVEL.platforms.forEach((p,i)=>{ if(p.hasCoin) questionStates[i]={hit:false,animY:0}; });
+  flagAnimY = LEVEL.flagPole.y + 10;
+  flagReached = false;
+}
+
+// ── PHYSICS ────────────────────────────────
+const GRAVITY=0.55, JUMP=-13, SPEED=3.8;
+
+function applyPhysics(ent) {
+  ent.vy += GRAVITY;
+  ent.x  += ent.vx;
+  ent.y  += ent.vy;
+  ent.onGround = false;
+
+  for(const p of LEVEL.platforms) {
+    if(ent.x+ent.w>p.x && ent.x<p.x+p.w &&
+       ent.y+ent.h>p.y && ent.y+ent.h<p.y+p.h+Math.abs(ent.vy)+2 &&
+       ent.vy>=0) {
+      ent.y=p.y-ent.h; ent.vy=0; ent.onGround=true;
+    }
+  }
+  // Pipes
+  for(const p of LEVEL.pipes) {
+    if(ent.x+ent.w>p.x && ent.x<p.x+p.w &&
+       ent.y+ent.h>GROUND_Y-p.h && ent.y+ent.h<GROUND_Y-p.h+Math.abs(ent.vy)+2 &&
+       ent.vy>=0) {
+      ent.y=GROUND_Y-p.h-ent.h; ent.vy=0; ent.onGround=true;
+    }
+  }
+  if(ent.x<0){ent.x=0; ent.vx=0;}
+  if(ent.x+ent.w>W){ent.x=W-ent.w; ent.vx=0;}
+}
+
+function overlap(a,b){
+  return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y;
+}
+
+function spawnParticles(x,y,color,count=8) {
+  for(let i=0;i<count;i++){
+    const a=(Math.PI*2/count)*i;
+    const s=2+Math.random()*4;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-2,
+      life:1,decay:0.03+Math.random()*0.04,size:3+Math.random()*4,color});
+  }
+}
+
+// ── UPDATE ─────────────────────────────────
+let lastT=0;
+function update(ts) {
+  frame++;
+  if(gameState!=='playing'){draw(); requestAnimationFrame(update); return;}
+
+  const left  = keys['ArrowLeft']  || keys['KeyA'];
+  const right = keys['ArrowRight'] || keys['KeyD'];
+  const jump  = keys['Space'] || keys['ArrowUp'] || keys['KeyW'];
+
+  if(left)      {player.vx=-SPEED; player.facing=-1;}
+  else if(right){player.vx= SPEED; player.facing= 1;}
+  else          {player.vx*=0.78;}
+
+  if(jump && player.onGround){
+    player.vy=JUMP; player.onGround=false;
+    spawnParticles(player.x+player.w/2,player.y+player.h,'#ffffff',4);
+  }
+
+  // Head bump — check platforms above
+  if(player.vy<0){
+    for(let i=0;i<LEVEL.platforms.length;i++){
+      const p=LEVEL.platforms[i];
+      if(player.x+player.w>p.x+4 && player.x<p.x+p.w-4 &&
+         player.y>p.y && player.y<p.y+p.h+10 && player.vy<0){
+        player.y=p.y+p.h; player.vy=1;
+        // Question block hit
+        if(p.hasCoin && questionStates[i] && !questionStates[i].hit){
+          questionStates[i].hit=true; questionStates[i].animY=-8;
+          coins++; score+=200; updateHUD();
+          spawnParticles(p.x+p.w/2,p.y,ERI.gold,10);
+        } else if(p.type==='brick' && !p.hasCoin){
+          spawnParticles(p.x+p.w/2,p.y,ERI.green,8);
+          p.broken=true;
+        }
+      }
+    }
+  }
+
+  applyPhysics(player);
+
+  if(Math.abs(player.vx)>0.5){
+    player.animTimer++;
+    if(player.animTimer>7){player.animTimer=0;player.animFrame=(player.animFrame+1)%4;}
+  } else { player.animFrame=0; }
+
+  if(player.invincible>0) player.invincible--;
+  if(player.y>H+80) playerDie();
+
+  // Animate question blocks
+  for(const [i,qs] of Object.entries(questionStates)){
+    if(qs.animY<0) qs.animY=Math.min(0,qs.animY+1.5);
+  }
+
+  // Enemies
+  for(const e of enemies){
+    if(e.dead){e.deadTimer--; if(e.deadTimer<=0)e.remove=true; continue;}
+    if(e.shellMode){
+      e.vx=e.shellVx; applyPhysics(e);
+      if(e.x<=0||e.x+e.w>=W)e.shellVx*=-1;
+    } else {
+      e.vx=e.dir*e.speed; applyPhysics(e);
+      if(e.x<=e.platX){e.dir=1;e.x=e.platX;}
+      if(e.x+e.w>=e.platX+e.platW){e.dir=-1;e.x=e.platX+e.platW-e.w;}
+    }
+
+    if(player.invincible===0 && overlap(player,e)){
+      if(player.vy>0 && player.y+player.h<e.y+e.h/2+8){
+        if(e.type==='koopa'&&!e.shellMode){
+          e.shellMode=true; e.shellVx=0; player.vy=-8;
+        } else {
+          e.dead=true; e.deadTimer=40; player.vy=-9;
+        }
+        score+=200; updateHUD();
+        spawnParticles(e.x+e.w/2,e.y,ERI.red,10);
+      } else { playerDie(); }
+    }
+  }
+  enemies=enemies.filter(e=>!e.remove);
+
+  // Coins
+  for(const c of coinItems){
+    if(!c.collected && overlap(player,c)){
+      c.collected=true; coins++; score+=100; updateHUD();
+      spawnParticles(c.x+c.w/2,c.y,ERI.gold,6);
+    }
+  }
+
+  // Flag / goal
+  if(!flagReached && overlap(player,LEVEL.goal)){
+    flagReached=true; score+=3000; updateHUD();
+    gameState='win';
+    showOverlay('YOU WIN!','★ ERITREA RISES ★','▶ PRESS SPACE TO PLAY AGAIN ◀');
+  }
+
+  // Particles
+  for(const p of particles){p.x+=p.vx;p.y+=p.vy;p.vy+=0.15;p.life-=p.decay;}
+  particles=particles.filter(p=>p.life>0);
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+function playerDie(){
+  if(player.invincible>0)return;
+  lives--; updateHUD();
+  spawnParticles(player.x+player.w/2,player.y+player.h/2,ERI.red,16);
+  if(lives<=0){
+    gameState='dead';
+    showOverlay('GAME OVER','★ TRY AGAIN ★','▶ PRESS SPACE TO RETRY ◀','#ff4444');
+  } else {
+    player.invincible=130;
+    player.x=LEVEL.playerStart.x; player.y=LEVEL.playerStart.y;
+    player.vx=0; player.vy=0;
+  }
+}
+
+function updateHUD(){
+  scoreEl.textContent=String(score).padStart(6,'0');
+  coinsEl.textContent='x '+String(coins).padStart(2,'0');
+  livesEl.textContent='x '+lives;
+}
+
+function showOverlay(title,sub,hint,col='#ffd700'){
+  overlay.innerHTML=`
+    <h1 style="color:${col}">${title}</h1>
+    <div class="sub">${sub}</div>
+    <div class="hint">${hint}</div>
+  `;
+  overlay.style.display='block';
+}
+
+// ── DRAW ───────────────────────────────────
+// Cloud data — Eritrean flag colors
+const CLOUD_COLORS = [ERI.green, ERI.blue, ERI.red, ERI.gold, ERI.greenLt, ERI.blueLt];
+const clouds = [
+  {x:60,  y:60,  w:120, h:50,  color:ERI.green,  speed:0.3},
+  {x:220, y:40,  w:100, h:42,  color:ERI.blue,   speed:0.25},
+  {x:390, y:70,  w:140, h:55,  color:ERI.red,    speed:0.35},
+  {x:560, y:45,  w:110, h:46,  color:ERI.gold,   speed:0.28},
+  {x:720, y:65,  w:130, h:52,  color:ERI.green,  speed:0.32},
+  {x:850, y:35,  w:95,  h:40,  color:ERI.blue,   speed:0.27},
+  {x:130, y:110, w:80,  h:36,  color:ERI.red,    speed:0.22},
+  {x:480, y:105, w:90,  h:38,  color:ERI.gold,   speed:0.3},
+  {x:700, y:115, w:110, h:44,  color:ERI.greenLt,speed:0.26},
+];
+
+// Hills
+const hills = [
+  {x:0,   y:380, w:200, h:90,  color:'#3a8800'},
+  {x:150, y:395, w:160, h:75,  color:'#2d6600'},
+  {x:320, y:385, w:180, h:80,  color:'#3a8800'},
+  {x:550, y:390, w:210, h:85,  color:'#2d6600'},
+  {x:720, y:378, w:190, h:95,  color:'#3a8800'},
+];
+
+function draw(){
+  // ── SKY ────────────────────────────────
+  const sky=ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#5ba8ff');
+  sky.addColorStop(0.6,'#87ceeb');
+  sky.addColorStop(1,'#c8e8f8');
+  ctx.fillStyle=sky; ctx.fillRect(0,0,W,H);
+
+  // ── HILLS ──────────────────────────────
+  for(const h of hills){
+    ctx.save();
+    ctx.fillStyle=h.color;
+    ctx.beginPath();
+    ctx.arc(h.x+h.w/2, h.y+h.h, h.w/2, Math.PI, 0);
+    ctx.fill();
+    // Lighter spots on hills
+    ctx.fillStyle='#55aa00';
+    ctx.globalAlpha=0.4;
+    ctx.beginPath();
+    ctx.arc(h.x+h.w*0.35,h.y+h.h*0.3,h.w*0.12,0,Math.PI*2); ctx.fill();
+    ctx.beginPath();
+    ctx.arc(h.x+h.w*0.65,h.y+h.h*0.2,h.w*0.08,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // ── CLOUDS (Eritrean flag colors) ───────
+  for(const c of clouds){
+    c.x-=c.speed;
+    if(c.x+c.w<0) c.x=W+c.w;
+    drawCloud(c.x,c.y,c.w,c.h,c.color);
+  }
+
+  // ── PIPES ─────────────────────────────
+  for(const p of LEVEL.pipes) drawPipe(p);
+
+  // ── PLATFORMS ─────────────────────────
+  for(let i=0;i<LEVEL.platforms.length;i++){
+    const p=LEVEL.platforms[i];
+    if(p.broken)continue;
+    const qs=questionStates[i];
+    const offsetY=qs?qs.animY:0;
+    drawPlatform(p,offsetY,qs&&qs.hit);
+  }
+
+  // ── FLAG POLE ─────────────────────────
+  drawFlagPole();
+
+  // ── COINS ─────────────────────────────
+  for(const c of coinItems) if(!c.collected) drawCoin(c);
+
+  // ── ENEMIES ───────────────────────────
+  for(const e of enemies) drawEnemy(e);
+
+  // ── PLAYER ────────────────────────────
+  if(gameState==='playing'||gameState==='title') drawPlayer();
+
+  // ── PARTICLES ─────────────────────────
+  for(const p of particles){
+    ctx.save();
+    ctx.globalAlpha=p.life;
+    ctx.fillStyle=p.color;
+    ctx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size);
+    ctx.restore();
+  }
+
+  // ── GROUND ────────────────────────────
+  // Ground drawn LAST so it covers pipe/platform bottoms
+  for(const p of LEVEL.platforms){
+    if(p.type==='ground') drawGround(p);
+  }
+}
+
+function drawCloud(x,y,w,h,color){
+  ctx.save();
+  ctx.fillStyle=color;
+  // White outline for visibility
+  ctx.shadowColor='rgba(255,255,255,0.6)';
+  ctx.shadowBlur=8;
+  // Puff 1
+  ctx.beginPath(); ctx.arc(x+w*0.2,y+h*0.6,h*0.5,0,Math.PI*2); ctx.fill();
+  // Puff 2 (big center)
+  ctx.beginPath(); ctx.arc(x+w*0.45,y+h*0.4,h*0.65,0,Math.PI*2); ctx.fill();
+  // Puff 3
+  ctx.beginPath(); ctx.arc(x+w*0.72,y+h*0.55,h*0.52,0,Math.PI*2); ctx.fill();
+  // Puff 4 top
+  ctx.beginPath(); ctx.arc(x+w*0.3,y+h*0.3,h*0.4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x+w*0.6,y+h*0.25,h*0.38,0,Math.PI*2); ctx.fill();
+  // Base fill rectangle
+  ctx.fillRect(x+w*0.18,y+h*0.5,w*0.64,h*0.5);
+  // White glint
+  ctx.fillStyle='rgba(255,255,255,0.35)';
+  ctx.shadowBlur=0;
+  ctx.beginPath(); ctx.arc(x+w*0.35,y+h*0.28,h*0.18,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawGround(p){
+  // Top grass strip — Eritrean green
+  ctx.fillStyle=ERI.green;
+  ctx.fillRect(p.x,p.y,p.w,10);
+  ctx.fillStyle=ERI.greenLt;
+  ctx.fillRect(p.x,p.y,p.w,4);
+
+  // Stone body
+  const bodyGrad=ctx.createLinearGradient(0,p.y+10,0,p.y+p.h);
+  bodyGrad.addColorStop(0,'#aa7744');
+  bodyGrad.addColorStop(1,'#7a5530');
+  ctx.fillStyle=bodyGrad;
+  ctx.fillRect(p.x,p.y+10,p.w,p.h-10);
+
+  // Tile grid
+  ctx.strokeStyle='#8a6030';
+  ctx.lineWidth=1;
+  for(let tx=p.x;tx<p.x+p.w;tx+=32){
+    ctx.beginPath();ctx.moveTo(tx,p.y+10);ctx.lineTo(tx,p.y+p.h);ctx.stroke();
+  }
+  for(let ty=p.y+26;ty<p.y+p.h;ty+=22){
+    ctx.beginPath();ctx.moveTo(p.x,ty);ctx.lineTo(p.x+p.w,ty);ctx.stroke();
+  }
+
+  // Grass tufts
+  ctx.fillStyle=ERI.greenLt;
+  for(let gx=p.x+6;gx<p.x+p.w;gx+=18){
+    ctx.fillRect(gx,p.y-3,3,5);
+    ctx.fillRect(gx+5,p.y-2,3,4);
+  }
+}
+
+function drawPlatform(p,offsetY=0,used=false){
+  const y=p.y+offsetY;
+
+  if(p.type==='brick'){
+    // Mario brick — reddish brown with mortar lines
+    ctx.fillStyle='#bb5500';
+    ctx.fillRect(p.x,y,p.w,p.h);
+    ctx.fillStyle='#dd7722';
+    ctx.fillRect(p.x+1,y+1,p.w-2,p.h/2-2);
+    // Mortar
+    ctx.fillStyle='#996633';
+    ctx.fillRect(p.x,y+p.h/2,p.w,2);
+    ctx.fillRect(p.x+p.w/2,y,2,p.h);
+    // Highlight
+    ctx.fillStyle='#ffaa44';
+    ctx.fillRect(p.x+2,y+2,4,4);
+    ctx.fillRect(p.x+p.w/2+2,y+2,4,4);
+
+  } else if(p.type==='question'){
+    // Classic ? block — gold with Eritrean styling
+    const col=used ? '#888866' : ERI.gold;
+    ctx.fillStyle=col;
+    ctx.fillRect(p.x,y,p.w,p.h);
+    ctx.fillStyle=used ? '#666655' : ERI.goldDk;
+    ctx.fillRect(p.x,y,p.w,3);       // top shadow
+    ctx.fillRect(p.x,y,3,p.h);       // left shadow
+    ctx.fillStyle=used?'#aaaaaa':'#ffee88';
+    ctx.fillRect(p.x+2,y+2,p.w-4,3); // highlight
+    // Question mark
+    ctx.fillStyle=used?'#555544':'#8b4400';
+    ctx.font='bold 18px monospace';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(used?'·':'?',p.x+p.w/2,y+p.h/2+1);
+
+  } else if(p.type==='stair'){
+    // Stair block
+    ctx.fillStyle='#aa7744';
+    ctx.fillRect(p.x,y,p.w,p.h);
+    ctx.fillStyle='#cc9966';
+    ctx.fillRect(p.x+1,y+1,p.w-2,6);
+    ctx.strokeStyle='#8a5520';
+    ctx.lineWidth=1;
+    ctx.strokeRect(p.x+0.5,y+0.5,p.w-1,p.h-1);
+  }
+}
+
+function drawPipe(p){
+  const py=GROUND_Y-p.h;
+  // Main body — Eritrean green
+  ctx.fillStyle=ERI.green;
+  ctx.fillRect(p.x+4,py,p.w-8,p.h);
+  // Shading
+  ctx.fillStyle=ERI.greenLt;
+  ctx.fillRect(p.x+6,py,8,p.h);
+  ctx.fillStyle='#1a5500';
+  ctx.fillRect(p.x+p.w-12,py,8,p.h);
+  // Rim top
+  ctx.fillStyle=ERI.green;
+  ctx.fillRect(p.x,py,p.w,14);
+  ctx.fillStyle=ERI.greenLt;
+  ctx.fillRect(p.x+2,py+2,12,10);
+  ctx.fillStyle='#1a5500';
+  ctx.fillRect(p.x+p.w-12,py+2,10,10);
+  // Outline
+  ctx.strokeStyle='#004400';
+  ctx.lineWidth=2;
+  ctx.strokeRect(p.x+4,py+14,p.w-8,p.h-14);
+  ctx.strokeRect(p.x,py,p.w,14);
+}
+
+function drawFlagPole(){
+  const fp=LEVEL.flagPole;
+
+  // Pole — white
+  ctx.fillStyle='#cccccc';
+  ctx.fillRect(fp.x+4,fp.y,4,fp.h);
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(fp.x+5,fp.y,2,fp.h);
+
+  // Ball on top
+  ctx.fillStyle=ERI.gold;
+  ctx.shadowColor=ERI.gold; ctx.shadowBlur=8;
+  ctx.beginPath(); ctx.arc(fp.x+6,fp.y,8,0,Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0;
+
+  // Eritrean flag on pole — animated slide down when reached
+  const flagY=flagReached
+    ? Math.min(fp.y+fp.h-50, (flagAnimY+=1))
+    : fp.y+10;
+
+  const fw=50, fh=34;
+  // Flag background — 3 horizontal stripes: green, blue, red... but Eritrean flag is
+  // actually green top, blue bottom with red triangle. Let's do it properly.
+  // Green top half
+  ctx.fillStyle=ERI.green;
+  ctx.fillRect(fp.x+8,flagY,fw,fh/2);
+  // Blue bottom half
+  ctx.fillStyle=ERI.blue;
+  ctx.fillRect(fp.x+8,flagY+fh/2,fw,fh/2);
+  // Red triangle on left
+  ctx.fillStyle=ERI.red;
+  ctx.beginPath();
+  ctx.moveTo(fp.x+8,flagY);
+  ctx.lineTo(fp.x+8+fh,flagY+fh/2);
+  ctx.lineTo(fp.x+8,flagY+fh);
+  ctx.closePath(); ctx.fill();
+  // Gold olive wreath (simplified as a circle)
+  ctx.fillStyle=ERI.gold;
+  ctx.shadowColor=ERI.gold; ctx.shadowBlur=4;
+  ctx.beginPath(); ctx.arc(fp.x+14,flagY+fh/2,7,0,Math.PI*2); ctx.stroke?ctx.stroke():null;
+  ctx.beginPath();
+  for(let a=0;a<Math.PI*2;a+=0.4){
+    ctx.arc(fp.x+14+Math.cos(a)*5,flagY+fh/2+Math.sin(a)*5,2,0,Math.PI*2);
+  }
+  ctx.fill();
+  ctx.shadowBlur=0;
+}
+
+function drawCoin(c){
+  const bob=Math.sin(frame*0.1+c.x)*3;
+  const spinX=Math.abs(Math.cos(frame*0.12+c.x*0.05));
+  ctx.save();
+  ctx.translate(c.x+c.w/2,c.y+c.h/2+bob);
+  ctx.scale(spinX>0.05?spinX:0.05,1);
+
+  // Classic coin
+  ctx.fillStyle=ERI.gold;
+  ctx.shadowColor=ERI.gold; ctx.shadowBlur=8;
+  ctx.beginPath(); ctx.arc(0,0,c.w/2,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#ffee66';
+  ctx.beginPath(); ctx.arc(-2,-2,c.w/4,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawEnemy(e){
+  if(e.dead){
+    ctx.save();
+    ctx.globalAlpha=e.deadTimer/40;
+    ctx.fillStyle=ERI.red;
+    ctx.fillRect(e.x,e.y+e.h-8,e.w,8);
+    ctx.restore(); return;
+  }
+
+  const cx=e.x+e.w/2, cy=e.y+e.h/2;
+  ctx.save();
+  ctx.translate(cx,cy);
+
+  if(e.shellMode){
+    // Koopa in shell
+    ctx.fillStyle='#2255aa';
+    ctx.beginPath(); ctx.arc(0,0,14,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#4488ff';
+    ctx.beginPath(); ctx.arc(-3,-3,6,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffffff';
+    ctx.font='12px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('🐢',0,0);
+  } else if(e.type==='goomba'){
+    // Goomba — mushroom creature, brown
+    // Feet
+    const footBob=e.animFrame===0?2:-2;
+    ctx.fillStyle='#442200';
+    ctx.fillRect(-11,10+footBob,10,8);
+    ctx.fillRect(1,10-footBob,10,8);
+
+    // Body
+    ctx.fillStyle='#884422';
+    ctx.beginPath(); ctx.arc(0,2,14,0,Math.PI*2); ctx.fill();
+
+    // Dark shading
+    ctx.fillStyle='#662200';
+    ctx.beginPath(); ctx.arc(0,6,14,0.1,Math.PI-0.1); ctx.fill();
+
+    // Eyes — angry
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(-9,-4,7,6); ctx.fillRect(2,-4,7,6);
+    ctx.fillStyle='#000000';
+    // Angled angry eyes
+    ctx.fillRect(-8,-3,4,4); ctx.fillRect(3,-3,4,4);
+    // angry brow
+    ctx.fillStyle='#220000';
+    ctx.fillRect(-10,-6,8,3); // left brow diagonal
+    ctx.fillRect(2,-6,8,3);
+
+    // Teeth
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(-7,6,5,4); ctx.fillRect(2,6,5,4);
+
+  } else if(e.type==='koopa'){
+    // Koopa — turtle guy, green shell
+    // Legs
+    const legBob=e.animFrame===0?2:-2;
+    ctx.fillStyle='#ffcc44';
+    ctx.fillRect(-10,12+legBob,9,10);
+    ctx.fillRect(1,12-legBob,9,10);
+
+    // Shell
+    ctx.fillStyle=ERI.green;
+    ctx.beginPath(); ctx.arc(0,-2,15,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=ERI.greenLt;
+    ctx.beginPath(); ctx.arc(-4,-6,6,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#003300'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.arc(0,-2,15,0,Math.PI*2); ctx.stroke();
+
+    // Head
+    ctx.fillStyle='#ffcc44';
+    ctx.beginPath(); ctx.arc(e.dir>0?10:-10,-10,10,0,Math.PI*2); ctx.fill();
+
+    // Eye
+    ctx.fillStyle='#000';
+    ctx.beginPath(); ctx.arc(e.dir>0?13:-13,-12,3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.beginPath(); ctx.arc(e.dir>0?12:-12,-13,1.5,0,Math.PI*2); ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawPlayer(){
+  if(player.invincible>0 && Math.floor(player.invincible/5)%2===0) return;
+  const {x,y,w,h,facing,animFrame}=player;
+  const cx=x+w/2;
+
+  ctx.save();
+  ctx.translate(cx,y+h/2);
+  ctx.scale(facing,1);
+
+  // ── ERITREAN MARIO CHARACTER ──────────
+  // Skin tone — warm brown (East African)
+  const skin = '#8B5A2B';
+  const skinDk = '#6B3A1B';
+
+  // Shadow
+  ctx.globalAlpha=0.2; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(0,h/2+3,10,4,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1;
+
+  // LEGS
+  const legSwing=player.onGround?Math.sin(animFrame*Math.PI/2)*5:0;
+  // Pants — Eritrean blue
+  ctx.fillStyle=ERI.blue;
+  ctx.fillRect(-9,5,8,13);
+  ctx.fillRect(1,5,8,13);
+  // Shoes — dark brown
+  ctx.fillStyle='#3a1a00';
+  ctx.fillRect(-11+legSwing,16,10,6);
+  ctx.fillRect(1-legSwing,16,10,6);
+
+  // OVERALLS — Eritrean red (like classic Mario red shirt)
+  ctx.fillStyle=ERI.red;
+  ctx.fillRect(-10,-8,20,15);
+  // Overall straps
+  ctx.fillStyle=ERI.blue;
+  ctx.fillRect(-8,-8,5,14);
+  ctx.fillRect(3,-8,5,14);
+  // Buttons
+  ctx.fillStyle=ERI.gold;
+  ctx.beginPath(); ctx.arc(-5,-2,2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(5,-2,2,0,Math.PI*2); ctx.fill();
+
+  // ARMS
+  ctx.fillStyle=skin;
+  ctx.fillRect(-14,-7,5,11);
+  ctx.fillRect(9,-7,5,11);
+  // Gloves — white
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(-15,2,7,6);
+  ctx.fillRect(8,2,7,6);
+
+  // NECK
+  ctx.fillStyle=skin;
+  ctx.fillRect(-4,-10,8,4);
+
+  // HEAD
+  ctx.fillStyle=skin;
+  ctx.fillRect(-10,-26,20,18);
+  // Ear
+  ctx.fillStyle=skinDk;
+  ctx.fillRect(10,-22,4,6);
+  // Jaw shadow
+  ctx.fillStyle=skinDk;
+  ctx.fillRect(-8,-12,16,4);
+
+  // HAIR — short black natural hair
+  ctx.fillStyle='#1a0a00';
+  ctx.fillRect(-10,-27,20,8);
+  // Hair texture bumps
+  ctx.fillStyle='#2a1a10';
+  for(let hx=-8;hx<10;hx+=5){
+    ctx.beginPath(); ctx.arc(hx,-26,3,Math.PI,0); ctx.fill();
+  }
+
+  // MUSTACHE — classic Mario style
+  ctx.fillStyle='#1a0a00';
+  ctx.fillRect(-6,-15,14,4);
+  ctx.beginPath(); ctx.arc(-2,-14,5,0,Math.PI); ctx.fill();
+  ctx.beginPath(); ctx.arc(6,-14,4,0,Math.PI); ctx.fill();
+
+  // NOSE
+  ctx.fillStyle=skin;
+  ctx.beginPath(); ctx.arc(4,-17,5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=skinDk;
+  ctx.beginPath(); ctx.arc(4,-17,3,0,Math.PI); ctx.fill();
+
+  // EYE
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(-5,-22,8,6);
+  ctx.fillStyle='#3a2000';
+  ctx.fillRect(-4,-21,5,4);
+  ctx.fillStyle='#000';
+  ctx.fillRect(-3,-21,3,3);
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(-2,-22,2,2);
+
+  // HAT — Eritrean red with green band and gold emblem
+  ctx.fillStyle=ERI.red;
+  ctx.fillRect(-11,-36,22,13);
+  ctx.fillRect(-13,-26,26,6);
+  // Hat brim
+  ctx.fillStyle='#aa0000';
+  ctx.fillRect(-13,-26,26,3);
+  // Green band
+  ctx.fillStyle=ERI.green;
+  ctx.fillRect(-11,-28,22,3);
+  // Gold 'E' emblem on hat
+  ctx.fillStyle=ERI.gold;
+  ctx.shadowColor=ERI.gold; ctx.shadowBlur=4;
+  ctx.font='bold 9px serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('E',-1,-33);
+  ctx.shadowBlur=0;
+
+  ctx.restore();
+}
+
+// ── INPUT ──────────────────────────────────
+document.addEventListener('keydown',e=>{
+  keys[e.code]=true;
+  if(e.code==='Space'){
+    if(gameState==='title'){
+      gameState='playing'; overlay.style.display='none'; initLevel();
+    } else if(gameState==='dead'){
+      lives=3;score=0;coins=0;updateHUD();
+      initLevel();gameState='playing';overlay.style.display='none';
+    } else if(gameState==='win'){
+      score=0;coins=0;updateHUD();
+      initLevel();gameState='playing';overlay.style.display='none';
+    }
+  }
+  e.preventDefault();
+});
+document.addEventListener('keyup',e=>{keys[e.code]=false;});
+
+// ── BOOT ───────────────────────────────────
+initLevel();
+requestAnimationFrame(update);
+</script>
+</body>
+</html>
